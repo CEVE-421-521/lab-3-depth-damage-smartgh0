@@ -1,8 +1,8 @@
 ---
 title: "Lab 3: Depth-Damage Models"
 subtitle: "DataFrames and Distributions"
-author: "Your Name"
-date: 2024-01-26
+author: "Solomon Nyamekye"
+date: 2024-02-05
 week: 3
 categories: [Lab]
 
@@ -25,19 +25,19 @@ format:
 
     # YOU CAN DO PDF OR DOCX BUT NOT BOTH
     # IF YOU UNCOMMENT docx, COMMENT OR DELETE pdf
-    pdf:
-        documentclass: article
-        fontsize: 11pt
-        geometry:
-            - margin=1in  
+    #pdf:
+        #documentclass: article
+        #fontsize: 11pt
+        #geometry:
+        #    - margin=1in  
+        #number-sections: true
+        #code-line-numbers: true
+
+    docx: 
+        toc: true
+        fig-format: png
         number-sections: true
         code-line-numbers: true
-
-    #docx: 
-    #    toc: true
-    #    fig-format: png
-    #    number-sections: true
-    #    code-line-numbers: true
 
 date-format: "ddd., MMM. D"
 ---
@@ -52,14 +52,173 @@ using Interpolations
 using Plots
 using StatsPlots
 using Unitful
-
+using Distributions
 Plots.default(; margin=6Plots.mm)
 ```
 
 # Site information
 
+**Site Name:** Galveston Pier 21, TX - Station. 
+
+**Station ID:** 8771450.
+
+**Location:** Latitude 29° 18.6 N, Longitude: 94° 47.6 W.
+
+**Water Level Max (ref MHHW):**	12.11 ft. Sep 08, 1900.
+
+**Water Level Min (ref MLLW):**	-6.28 ft. Jan 11, 1908.
+
+**Mean Range:**	1.02 ft.
+
+# Building Information 
+
+**Building Name:** Habour House Hotel
+
+**Address:**  21 Galveston Texas 77550
+
+**Estimated distance from guage:** 319 feet (less than one mile from the guage and inland)
+
+**Estimated Building Elevation:** 5.35 feet
+
 # Depth-Damage
+
+**Selected Damage function:** USACE Galvestion District Damage function with ID 85 was selected. The USACE Galveston functions are based on flood damage records, as well as post event surveys and are widely used by the Galveston district where the selected building is located.  The selected description is a good fit for the selected building (the function is for hotels/motels) which is a popular hotel in the region that serves mostly fishermen in the area. 
+
+```{julia}
+include("depthdamage.jl")
+haz_fl_dept = CSV.read("data/haz_fl_dept.csv", DataFrame)
+first(haz_fl_dept, 3)
+
+usace_galv85 = @rsubset(
+    haz_fl_dept, :Description == "Average hotel/motel, Contents (Equipment/Inventory)" #using USACE Galveston 85
+)[
+    1, :,
+]
+dd85 = DepthDamageData(usace_galv85)
+
+fieldnames(typeof(dd85))
+```
+
+```{julia}
+
+function get_depth_damage_function(
+    depth_train::Vector{<:T}, dmg_train::Vector{<:AbstractFloat}
+) where {T<:Unitful.Length}
+
+    # interpolate
+    depth_ft = ustrip.(u"ft", depth_train)
+    interp_fn = Interpolations.LinearInterpolation(
+        depth_ft,
+        dmg_train;
+        extrapolation_bc=Interpolations.Flat(),
+    )
+    damage_fn = function (depth::T2) where {T2<:Unitful.Length}
+        return interp_fn(ustrip.(u"ft", depth))
+    end
+    return damage_fn
+end
+
+```
+```{julia}
+damage_fn85 = get_depth_damage_function(dd85.depths, dd85.damages)
+```
+
+**Plotting Depth-damage curve for Habour House Hotel, 21 Galveston Texas 77550**
+
+```{julia}
+p = let
+    depths = uconvert.(u"ft", (-10.0u"ft"):(1.0u"inch"):(30.0u"ft")) #setting plot boundaries to -10ft to 30ft in 1 inch increments
+    damages = damage_fn85.(depths)
+    scatter(
+        depths,
+        damages;
+        xlabel="Flood Depth",
+        ylabel="Damage (%)",
+        label="$(dd85.description) ($(dd85.source))",
+        legend=:bottomright,
+        size=(800, 400),
+        linewidth=2,
+    )
+end
+
+```
+
+The above depth-damage curve indicates percentage damage increases (almost at constant rate) as flood depth increases.
 
 # Expected annual damages
 
+**Plotting probability distribution function for Habour House Hotel, 21 Galveston Texas 77550**
+
+```{julia}
+
+gauge_dist = GeneralizedExtremeValue(8, 1.5, 0.1)  
+
+plot2 = plot(
+    gauge_dist;
+    label="Guage Distribution",
+    xlabel="Water Level (ft)",
+    ylabel="Probability Density",
+    legend=:topright,
+    linewidth=2,
+)
+
+offset = 5.35 # using elevation of the building  5.35ft as offset.
+house_dist = GeneralizedExtremeValue(gauge_dist.μ - offset, gauge_dist.σ, gauge_dist.ξ)
+
+plot!(plot2, house_dist; label="House Distribution, linewidth=2")
+```
+
+
+**Estimating expected annual damages for Habour House Hotel, 21 Galveston Texas 77550**
+
+
+```{julia}
+samples = rand(house_dist, 100_000) .* 1u"ft"
+
+damages = damage_fn85.(samples)
+
+#expected_damages_pct = mean(damages)
+expected_damages_pct = round(mean(damages))
+```
 # Discussion
+
+```{julia}
+
+usace_galv209 = @rsubset(
+    haz_fl_dept, :DmgFnId == 209 #using USACE Galveston 209
+)[
+    1, :,
+]
+dd209 = DepthDamageData(usace_galv209)
+
+fieldnames(typeof(dd209))
+```    
+```{julia}
+damage_fn209 = get_depth_damage_function(dd209.depths, dd209.damages)
+
+```
+```{julia}
+p = let
+    depths = uconvert.(u"ft", (-10.0u"ft"):(1.0u"inch"):(30.0u"ft")) #setting plot boundaries to -10ft to 30ft in 1 inch increments
+    damages = damage_fn209.(depths)
+    scatter(
+        depths,
+        damages;
+        xlabel="Flood Depth",
+        ylabel="Damage (%)",
+        label="$(dd209.description) ($(dd209.source))",
+        legend=:bottomright,
+        size=(800, 400),
+        linewidth=2,
+    )
+end
+```
+```{julia}
+samples = rand(house_dist, 100_000) .* 1u"ft"
+
+damages = damage_fn209.(samples)
+
+#expected_damages_pct = mean(damages)
+expected_damages_pct = round(mean(damages))
+```
+Using the same probability distribution function, the depth-damage function provided by USACE Galveston 209, which does not account for hotel equipment/inventory, yields lower expected annual damages compared to the USACE Galveston 85, which considers these factors. Consequently, USACE Galveston 85 demonstrates greater sensitivity to flood depth, making it the preferable choice for estimating expected annual damages with reduced uncertainty when evaluating the same house.
